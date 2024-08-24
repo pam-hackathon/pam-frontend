@@ -4,7 +4,7 @@ import { NextApiRequest } from 'next';
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY });
 
 const systemPrompt = `You are an AI Voice Assistant for a car dealership. Your job is to assist callers by providing helpful, accurate, 
   and friendly responses to their inquiries about car sales, services, and appointments. The conversation is conducted in 
@@ -44,6 +44,7 @@ export async function POST(req) {
     });
 
     const generatedResponse = response.choices[0].message.content;
+    console.log(generatedResponse);
     return NextResponse.json({ response: generatedResponse });
   } catch (error) {
     console.error('Error generating response:', error);

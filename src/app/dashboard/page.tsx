@@ -181,7 +181,7 @@ export default function Dashboard() {
   const generateBotResponse = async (userMessage: string) => {
     try {
       // Fetch the generated response from your backend
-      const backendResponse = await fetch("/api/route", {
+      const backendResponse = await fetch("/api/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -225,6 +225,7 @@ export default function Dashboard() {
       console.error("Error:", error);
     }
   };
+
   return (
     <div className="grid h-screen w-full">
        {audioUrl && (

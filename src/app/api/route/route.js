@@ -1,9 +1,10 @@
 // ./src/app/api/route/route.tsx
 
-import { NextApiRequest, NextApiResponse } from 'next';
+import { NextApiRequest } from 'next';
+import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const systemPrompt = `You are an AI Voice Assistant for a car dealership. Your job is to assist callers by providing helpful, accurate, 
   and friendly responses to their inquiries about car sales, services, and appointments. The conversation is conducted in 
@@ -29,27 +30,27 @@ const systemPrompt = `You are an AI Voice Assistant for a car dealership. Your j
   Your goal is to create a smooth, human-like conversational experience that helps the caller feel informed and valued during their interaction with the dealership.
 `;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method === 'POST') {
-    const { transcription } = req.body;
+export async function POST(req) {
+  const { transcription } = await req.json();
 
-    try {
-      const response = await openai.chat.completions.create({
-        messages: [
-            {role: 'system', content: systemPrompt},
-            {role: 'user', content: transcription},
-        ],
-        model: "gpt-4o",
-        max_tokens: 1000
-      })
-      
-      const generatedResponse = response.choices[0].message.content
-      res.status(200).json({ response: generatedResponse });
-    } catch (error) {
-      console.error('Error generating response:', error);
-      res.status(500).json({ error: 'Failed to generate response from OpenAI' });
-    }
-  } else {
-    res.status(405).json({ error: 'Method not allowed' });
+  try {
+    const response = await openai.chat.completions.create({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: transcription },
+      ],
+      model: "gpt-4o",
+      max_tokens: 1000,
+    });
+
+    const generatedResponse = response.choices[0].message.content;
+    return NextResponse.json({ response: generatedResponse });
+  } catch (error) {
+    console.error('Error generating response:', error);
+    return NextResponse.json({ error: 'Failed to generate response from OpenAI' }, { status: 500 });
   }
+}
+
+export async function GET() {
+  return NextResponse.json({ error: 'Method not allowed' }, { status: 405 });
 }

@@ -91,7 +91,7 @@ export default function Dashboard() {
         mediaRecorder.start(250);
       };
 
-      socket.onmessage = (message) => {
+      socket.onmessage = async (message) => {
         const received = JSON.parse(message.data);
         console.log({ received });
 
@@ -125,6 +125,13 @@ export default function Dashboard() {
             // Create a new message
             return [...prevMessages, { type: "user", content: transcript }];
           });
+
+          // Check if the time threshold has been reached
+          if (currentTime - lastMessageTime >= TIME_THRESHOLD) {
+            console.log("Generating bot response...");
+            await generateBotResponse(transcript);
+          }
+
           lastMessageTime = currentTime;
         }
       };
@@ -179,7 +186,7 @@ export default function Dashboard() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({ transcription: userMessage }),
       });
   
       if (!backendResponse.ok) {
@@ -190,7 +197,7 @@ export default function Dashboard() {
       const generatedResponse = backendData.response;
   
       // Fetch the audio blob from your backend route
-      const audioResponse = await fetch("/tts", {
+      const audioResponse = await fetch("/api/tts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

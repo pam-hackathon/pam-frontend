@@ -1,32 +1,30 @@
-import { createClient } from "@deepgram/sdk";
+const { createClient } = require("@deepgram/sdk");
+const { NextResponse } = require('next/server');
 
-// Create a Deepgram client with your API key
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+// STEP 1: Create a Deepgram client with your API key
+const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
 
-export async function POST(req, res) {
-  const { text } = req.body;
-  console.log('Text:', text);
-  try {
-    const response = await deepgram.speak.request(
-      { text },
-      {
-        model: 'aura-asteria-en',
-        encoding: 'linear16',
-        container: 'wav',
-      }
-    );
-
-    const stream = await response.getStream();
-    const audioBuffer = await getAudioBuffer(stream);
-    const audioBlob = new Blob([audioBuffer], { type: 'audio/wav' });
-
-    res.setHeader('Content-Type', 'audio/wav');
-    return new NextResponse(audioBlob);
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ message: 'Error generating speech' });
+const getAudio = async (text) => {
+  // STEP 2: Make a request and configure the request with options (such as model choice, audio configuration, etc.)
+  const response = await deepgram.speak.request(
+    { text },
+    {
+      model: "aura-asteria-en",
+      encoding: "linear16",
+      container: "wav",
+    }
+  );
+  // STEP 3: Get the audio stream and headers from the response
+  const stream = await response.getStream();
+  if (stream) {
+    // STEP 4: Convert the stream to an audio buffer
+    const buffer = await getAudioBuffer(stream);
+    return buffer;
+  } else {
+    console.error("Error generating audio:", stream);
+    throw new Error("Error generating audio");
   }
-}
+};
 
 // Helper function to convert stream to audio buffer
 const getAudioBuffer = async (response) => {
@@ -36,6 +34,7 @@ const getAudioBuffer = async (response) => {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+
     chunks.push(value);
   }
 
@@ -46,3 +45,24 @@ const getAudioBuffer = async (response) => {
 
   return Buffer.from(dataArray.buffer);
 };
+
+// POST function to handle requests
+export async function POST(req) {
+  try {
+    const { text } = await req.json();
+
+    const audioBuffer = await getAudio(text);
+
+    const response = new NextResponse(audioBuffer, {
+      headers: {
+        'Content-Type': 'audio/wav',
+        'Content-Disposition': 'attachment; filename="output.wav"',
+      },
+    });
+
+    return response;
+  } catch (error) {
+    console.error('Error generating speech:', error);
+    return new NextResponse(JSON.stringify({ message: 'Error generating speech' }), { status: 500 });
+  }
+}

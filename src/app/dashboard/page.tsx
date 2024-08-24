@@ -28,6 +28,8 @@ export default function Dashboard() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const [isAudioReady, setIsAudioReady] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY!);
 
   useEffect(() => {
@@ -36,23 +38,31 @@ export default function Dashboard() {
       const initialMessage = messages[0].content;
       console.log({ initialMessage });
 
-      const ttsResponse = await fetch('/api/tts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: initialMessage }),
-      });
+      try {
+        const ttsResponse = await fetch('/api/tts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: initialMessage }),
+        });
 
-      if (!ttsResponse.ok) {
-        throw new Error('Failed to make request to TTS API');
+        if (!ttsResponse.ok) {
+          throw new Error('Failed to make request to TTS API');
+        }
+
+        const audioBlob = await ttsResponse.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        setAudioUrl(audioUrl);
+
+        // Attempt to play the audio automatically
+        const audio = new Audio(audioUrl);
+        audio.play().catch((error) => {
+          console.error('Autoplay failed:', error);
+        });
+      } catch (error) {
+        console.error('Error playing initial message:', error);
       }
-
-      const audioBlob = await ttsResponse.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-
-      const audio = new Audio(audioUrl);
-      audio.play();
     };
 
     playInitialMessage();
@@ -210,6 +220,9 @@ export default function Dashboard() {
   };
   return (
     <div className="grid h-screen w-full">
+       {audioUrl && (
+        <audio src={audioUrl} autoPlay />
+      )}
       <div className="flex flex-col">
         <header className="sticky top-0 z-10 flex h-[57px] justify-between items-center gap-1 border-b bg-background px-8">
           <h1 className="text-xl font-semibold">Playground</h1>

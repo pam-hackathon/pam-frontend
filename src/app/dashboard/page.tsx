@@ -8,7 +8,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import fs from "fs";
+import { createClient } from "@deepgram/sdk";
 
 interface Message {
   type: "user" | "bot";
@@ -26,6 +28,35 @@ export default function Dashboard() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY!);
+
+  useEffect(() => {
+    // Play the initial bot message
+    const playInitialMessage = async () => {
+      const initialMessage = messages[0].content;
+      console.log({ initialMessage });
+
+      const ttsResponse = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: initialMessage }),
+      });
+
+      if (!ttsResponse.ok) {
+        throw new Error('Failed to make request to TTS API');
+      }
+
+      const audioBlob = await ttsResponse.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      const audio = new Audio(audioUrl);
+      audio.play();
+    };
+
+    playInitialMessage();
+  }, []);
 
   const startMic = async () => {
     try {
@@ -58,11 +89,11 @@ export default function Dashboard() {
           console.error("No alternatives available in the received message");
           return;
         }
-        
+
         const transcript = received.channel.alternatives[0].transcript;
         const currentTime = Date.now();
 
-        if (transcript && received.is_final) {
+        if (transcript) {
           console.log(transcript);
           setMessages((prevMessages) => {
             if (
@@ -130,6 +161,53 @@ export default function Dashboard() {
     }
   };
 
+  const generateBotResponse = async (userMessage: string) => {
+    try {
+      // Fetch the generated response from your backend
+      const backendResponse = await fetch("/api/route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: userMessage }),
+      });
+  
+      if (!backendResponse.ok) {
+        throw new Error("Failed to fetch response from backend");
+      }
+  
+      const backendData = await backendResponse.json();
+      const generatedResponse = backendData.response;
+  
+      // Fetch the audio blob from your backend route
+      const audioResponse = await fetch("/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: generatedResponse }),
+      });
+  
+      if (!audioResponse.ok) {
+        throw new Error("Failed to fetch audio from backend");
+      }
+  
+      const audioBlob = await audioResponse.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+  
+      // Play the generated speech aloud
+      const audio = new Audio(audioUrl);
+      audio.play();
+  
+      // Update the messages state with the bot's response
+      setMessages((prevMessages) => [
+        ...prevMessages,
+        { type: "bot", content: generatedResponse },
+      ]);
+    } catch (error) {
+      console.error("Error:", error);
+    }
+  };
   return (
     <div className="grid h-screen w-full">
       <div className="flex flex-col">

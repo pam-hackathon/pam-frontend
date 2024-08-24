@@ -31,13 +31,14 @@ const systemPrompt = `You are an AI Voice Assistant for a car dealership. Your j
 `;
 
 export async function POST(req) {
-  const { transcription } = await req.json();
+  const { transcription, context } = await req.json();
+  const query = `Context: ${context} \n\n${transcription}`;
 
   try {
     const response = await openai.chat.completions.create({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: transcription },
+        { role: 'user', content: query },
       ],
       model: "gpt-4o",
       max_tokens: 1000,

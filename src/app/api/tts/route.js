@@ -2,7 +2,7 @@ const { createClient } = require("@deepgram/sdk");
 const { NextResponse } = require('next/server');
 
 // STEP 1: Create a Deepgram client with your API key
-const deepgram = createClient(process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const getAudio = async (text) => {
   // STEP 2: Make a request and configure the request with options (such as model choice, audio configuration, etc.)

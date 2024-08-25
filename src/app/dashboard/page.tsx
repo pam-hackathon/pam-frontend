@@ -28,6 +28,8 @@ export default function Dashboard() {
   const socketRef = useRef<WebSocket | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
+  let botResponseStartTime = 0;
+
   const startMic = async () => {
     try { // Request access to user's mic
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -51,50 +53,46 @@ export default function Dashboard() {
             socket.send(event.data);
           }
         });
-        mediaRecorder.start(250); // Record in chunks of 250ms
+        mediaRecorder.start(500); // Record in chunks of 250ms
       };
 
       socket.onmessage = async (message) => {
         const received = JSON.parse(message.data);
-        console.log({ received });
-
+      
         if (!received.channel) {
           console.error("No alternatives available in the received message");
           return;
         }
-
-        // Extract transcribed text
+      
         const transcript = received.channel.alternatives[0].transcript;
         const currentTime = Date.now();
-
+      
         if (transcript) {
           console.log(transcript);
           setMessages((prevMessages) => {
             const newMessages = [...prevMessages];
-            if (currentTime - lastMessageTime < TIME_THRESHOLD && newMessages.length > 0) { 
-              // If within TIME_THRESHOLD, append to the last message
-              const lastMessage = newMessages[newMessages.length - 1];
-              if (lastMessage.type === "user") {
-                newMessages[newMessages.length - 1] = {
-                  ...lastMessage,
-                  content: lastMessage.content + " " + transcript,
-                };
-              } else {
-                newMessages.push({ type: "user", content: transcript });
-              }
+            const lastMessage = newMessages[newMessages.length - 1];
+      
+            if (lastMessage && lastMessage.type === "user" && currentTime - lastMessageTime < TIME_THRESHOLD) {
+              // Append to the last user message if within the time threshold
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: lastMessage.content + " " + transcript,
+              };
             } else {
-              // Create a new message
+              // Create a new message if it's a new utterance or the first message
               newMessages.push({ type: "user", content: transcript });
             }
-
-            // Check if the time threshold has been reached
+      
+            // Check if the time threshold has been reached for generating a bot response
             if (currentTime - lastMessageTime >= TIME_THRESHOLD) {
               console.log("Generating bot response...");
-              generateBotResponse(transcript, newMessages);
+              generateBotResponse(newMessages[newMessages.length - 1].content, newMessages);
             }
-
+      
             lastMessageTime = currentTime;
-
+            botResponseStartTime = Date.now();
+      
             return newMessages;
           });
         }
@@ -150,28 +148,57 @@ export default function Dashboard() {
 
   const generateBotResponse = async (userMessage: string, messages: Message[]) => {
     try {
-      const botResponseStartTime = Date.now();
-      const backendResponse = await fetch("/api/generate", {
+      //const botResponseStartTime = Date.now(); // Record start time to measure how long the response takes
+      const backendResponse = await fetch("/api/generate", { // Post req to the LLM
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
+        body: JSON.stringify({ // User's most recent message and conversation
           transcription: userMessage,
           context: messages.map((message) => (message.type === "bot" ? "BOT: " : "USER: ") + message.content + "\n").join(" "),
         }),
       });
   
-      if (!backendResponse.ok) {
+      if (!backendResponse.ok) { // Unsuccessful response
         throw new Error("Failed to fetch response from backend");
       }
-  
+      
+      // Get reader to stream the response data
       const reader = backendResponse.body!.getReader();
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder(); // Decoder to convert bytes to text
       let fullResponse = "";
       let lastSentence = "";
+      const audioQueue: string[] = []; // Queue for sentences to be converted to audio
+      let isPlaying = false;
   
+      // Start with an empty message for the bot response
       setMessages(prev => [...prev, { type: "bot", content: "" }]);
+  
+      const playNextInQueue = async () => {
+        if (audioQueue.length > 0 && !isPlaying) {
+          isPlaying = true; // Indicate audio is playing
+          const text = audioQueue.shift()!; // Get the next sentence from queue
+          const audioResponse = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          if (audioResponse.ok) {
+            const audioBlob = await audioResponse.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+            audio.onended = () => {
+              isPlaying = false;
+              playNextInQueue();
+            };
+            audio.play();
+          } else {
+            isPlaying = false;
+            playNextInQueue();
+          }
+        }
+      };
   
       while (true) {
         const { done, value } = await reader.read();
@@ -179,27 +206,23 @@ export default function Dashboard() {
         const partialResponse = decoder.decode(value);
         fullResponse += partialResponse;
         
-        // Update UI with full response
+        // Update the UI with the current full response so far
         setMessages(prev => {
           const newMessages = [...prev];
-          newMessages[newMessages.length - 1] = { type: "bot", content: fullResponse };
+          newMessages[newMessages.length - 1] = {
+            type: "bot",
+            content: fullResponse
+          };
           return newMessages;
         });
         
         // Accumulate sentences for TTS
         lastSentence += partialResponse;
         if (lastSentence.endsWith(".") || lastSentence.endsWith("!") || lastSentence.endsWith("?")) {
-          // Start TTS for complete sentence
           if (lastSentence.trim().length > 0) {
-            const audioResponse = await fetch("/api/tts", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: lastSentence.trim() }),
-            });
-            if (audioResponse.ok) {
-              const audioBlob = await audioResponse.blob();
-              const audioUrl = URL.createObjectURL(audioBlob);
-              new Audio(audioUrl).play();
+            audioQueue.push(lastSentence.trim());
+            if (!isPlaying) {
+              playNextInQueue();
             }
           }
           lastSentence = ""; // Reset for next sentence
@@ -211,7 +234,7 @@ export default function Dashboard() {
       console.error("Error:", error);
     }
   };
-
+  
   return (
     <div className="grid h-screen w-full">
       {audioUrl && <audio src={audioUrl} autoPlay />}

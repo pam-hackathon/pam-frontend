@@ -28,8 +28,6 @@ export default function Dashboard() {
   const socketRef = useRef<WebSocket | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  let botResponseStartTime = 0;
-
   const startMic = async () => {
     try {
       // Request access to user's mic
@@ -39,11 +37,14 @@ export default function Dashboard() {
       const tokenResponse = await fetch("/api/websocket");
       const { token } = await tokenResponse.json(); // Fetch token for connecting to WebSocket
       const socket = new WebSocket( // Create WebSocket connection to Deepgram
-        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true",
+        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true&endpointing=650",
         ["token", token]
       );
 
       let lastMessageTime = 0;
+      let interimBuffer = "";
+      let runningTranscription = ""; // Buffer to keep track of the current transcription
+      let botResponseTimer: NodeJS.Timeout | undefined; // Timer to keep track of the bot response
       const TIME_THRESHOLD = 8000; // 8 seconds
 
       socket.onopen = () => {
@@ -69,70 +70,122 @@ export default function Dashboard() {
         }
 
         const transcript = received.channel.alternatives[0].transcript;
+
+        if (transcript.trim() === "") {
+          return;
+        }
+
         const currentTime = Date.now();
 
-        let interimBuffer = "";
-        let botResponseTimer: NodeJS.Timeout | null = null;
+        setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+          const lastMessage = newMessages[newMessages.length - 1];
 
-        if (transcript) {
-          setMessages((prevMessages) => {
-            const newMessages = [...prevMessages];
-            const lastMessage = newMessages[newMessages.length - 1];
-
-            if (lastMessage && lastMessage.type === "user" && currentTime - lastMessageTime < TIME_THRESHOLD) {
-              // Append to the interim buffer
-              interimBuffer += " " + transcript;
-              // Update the last user message with the interim transcript
-              newMessages[newMessages.length - 1] = {
-                ...lastMessage,
-                content: interimBuffer.trim(),
-              };
-            } else {
+          if (
+            lastMessage &&
+            lastMessage.type === "user" &&
+            currentTime - lastMessageTime < TIME_THRESHOLD &&
+            received.is_final === false
+          ) {
+            // Set the interim buffer
+            interimBuffer = transcript;
+            // Update the last user message with the interim transcript
+            newMessages[newMessages.length - 1] = {
+              ...lastMessage,
+              content: (lastMessage.content + " " + interimBuffer).trim(),
+            };
+          } else {
+            // Check if the last message was from a bot
+            if (lastMessage && lastMessage.type === "bot") {
               // Create a new message if it's a new utterance or the first message
               newMessages.push({ type: "user", content: transcript });
               interimBuffer = transcript; // Reset the interim buffer
+              runningTranscription = transcript; // Update the running transcription
+            } else {
+              // Append the interim buffer to the last user message
+              interimBuffer = transcript;
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: (lastMessage.content + " " + interimBuffer).trim(),
+              };
+            }
+          }
+
+          if (received.is_final === true || received.speech_final === true) {
+            // Check if the new transcript is an extension of the last part of the running transcription
+            const lastWords = runningTranscription
+              .split(" ")
+              .slice(-transcript.split(" ").length)
+              .join(" ");
+            if (lastWords === transcript) {
+              // If the last part matches the new transcript, do not append it again
+              runningTranscription = runningTranscription.trim();
+            } else {
+              // Find the longest suffix of `runningTranscription` that matches a prefix of `transcript`
+              let overlapIndex = -1;
+              for (let i = 1; i <= transcript.length; i++) {
+                if (runningTranscription.endsWith(transcript.substring(0, i))) {
+                  overlapIndex = i;
+                }
+              }
+              // Append the non-overlapping part of the transcript
+              runningTranscription +=
+                " " + transcript.substring(overlapIndex).trim();
             }
 
-            if (received.is_final === true) {
-              // Replace the interim buffer with the final transcript
-              newMessages[newMessages.length - 1] = {
-                ...newMessages[newMessages.length - 1],
-                content: transcript,
-              };
-              interimBuffer = transcript; // Update the interim buffer
-            }
-            
+            console.log("Running transcript:", runningTranscription);
+            newMessages[newMessages.length - 1] = {
+              ...newMessages[newMessages.length - 1],
+              content: runningTranscription.trim(),
+            };
+            interimBuffer = ""; // Reset the interim buffer
+
             if (received.speech_final === true) {
-              // Append the current transcript to the previous transcript
-              newMessages[newMessages.length - 1] = {
-                ...newMessages[newMessages.length - 1],
-                content: newMessages[newMessages.length - 1].content + " " + transcript,
-              };
-              interimBuffer += " " + transcript; // Update the interim buffer
-            }
-            
-            if (received.is_final === true && received.speech_final === true && currentTime - lastMessageTime < 5000) {
-              // Clear the buffer
-              interimBuffer = "";
-            
+              console.log("Generating bot response...");
               if (botResponseTimer) {
                 clearTimeout(botResponseTimer);
               }
-            
+
               botResponseTimer = setTimeout(() => {
-                generateBotResponse(
-                  newMessages[newMessages.length - 1].content,
-                  newMessages
-                );
-              }, 5000); // Set the timer for 5 seconds
+                generateBotResponse(runningTranscription, newMessages);
+              }, 500);
             }
+          }
 
-            lastMessageTime = currentTime;
-            botResponseStartTime = Date.now();
+          // if (received.speech_final === true) {
+          //   // Check if the new transcript is an extension of the last part of the running transcription
+          //   const lastWords = runningTranscription.split(" ").slice(-transcript.split(" ").length).join(" ");
+          //   if (lastWords !== transcript) {
+          //     // Remove the last part if it matches the beginning of the new transcript
+          //     runningTranscription = runningTranscription.replace(new RegExp(`\\b${lastWords}$`), "").trim();
+          //   }
+          //   runningTranscription += " " + transcript;
+          //   console.log("Final transcript:", runningTranscription);
+          //   newMessages[newMessages.length - 1] = {
+          //     ...newMessages[newMessages.length - 1],
+          //     content: runningTranscription.trim(),
+          //   };
+          //   // Clear the buffer
+          //   interimBuffer = "";
 
-            return newMessages;
-          });
-        }
+          //   console.log("Generating bot response...");
+          //   if (botResponseTimer) {
+          //     clearTimeout(botResponseTimer);
+          //   }
+
+          //   botResponseTimer = setTimeout(() => {
+          //     generateBotResponse(runningTranscription, newMessages);
+          //   }, 500);
+          // }
+
+          if (currentTime - lastMessageTime >= TIME_THRESHOLD) {
+            interimBuffer = ""; // Reset the interim buffer if time threshold is exceeded
+          }
+
+          lastMessageTime = currentTime;
+
+          return newMessages;
+        });
       };
 
       socket.onclose = () => {

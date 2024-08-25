@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
-## Getting Started
+# Pam Chat
 
-First, run the development server:
+An AI assistant that transcribes your voice in realtime and responds in sub 1000ms. Hear a response quickly from an intelligent support bot that sounds like a real human. The assistant is ready to help for all your car needs!
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Features
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Live transcriptions of voice audio
+- Sub 1000ms responses with groq
+- Text to speech synthesis for bot responses
+- RAG of responses using past messages
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Tech Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+ - Frontend: Next.js, TailwindCSS, shadcn
+ - Backend: Node.js, Javascript
+ - Deployment: Vercel
+ - LLM: llama3-groq-8b-8192
+ - SST: Deepgram Nova-2
+ - TTS: Deepgram Aura
 
-## Learn More
 
-To learn more about Next.js, take a look at the following resources:
+### See our  [Demo](https://pam-voicechat.vercel.app/)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+## Challenges
 
-## Deploy on Vercel
+- The greatest initial challenge had been finding a solution for SST and TTS.
+    - We thought of using WebSockets and Neural Networks for live streaming voice, but we had neither the time nor the expertise, so we settled with [Deepram](https://deepgram.com/).
+- Live transcriptions had been the highest hurdle at the end. 
+    - We wanted our transcriptions to be shown in realtime, which we achieved with `Deepgram`'s interim results, but had to continuously checked for any repeated word sequences.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+
+## Future Iterations
+
+- Implement a websocket to enable real time communication between client and server
+- A neural network built from scratch using voice datasets OR using libraries like [faster-whisperer](https://github.com/SYSTRAN/faster-whisper)
+
+
+## Authors
+
+- [@Alex](https://www.linkedin.com/in/alexander-farouz-1433g/)
+- [@Harvey](https://www.linkedin.com/in/harvey-tseng/)
+
+

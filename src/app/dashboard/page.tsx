@@ -31,12 +31,13 @@ export default function Dashboard() {
   let botResponseStartTime = 0;
 
   const startMic = async () => {
-    try { // Request access to user's mic
+    try {
+      // Request access to user's mic
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
 
-      const tokenResponse = await fetch("/api/websocket")
-      const { token } = await tokenResponse.json() // Fetch token for connecting to WebSocket
+      const tokenResponse = await fetch("/api/websocket");
+      const { token } = await tokenResponse.json(); // Fetch token for connecting to WebSocket
       const socket = new WebSocket( // Create WebSocket connection to Deepgram
         "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true",
         ["token", token]
@@ -58,24 +59,26 @@ export default function Dashboard() {
 
       socket.onmessage = async (message) => {
         const received = JSON.parse(message.data);
-        if (!received.channel || !received.channel.alternatives || received.channel.alternatives.length === 0) {
+        if (
+          !received.channel ||
+          !received.channel.alternatives ||
+          received.channel.alternatives.length === 0
+        ) {
           console.error("No alternatives available in the received message");
           return;
         }
-      
+
         const transcript = received.channel.alternatives[0].transcript;
         const currentTime = Date.now();
-        console.log("Received:", received);
-      
+
         let interimBuffer = "";
-        let botResponseGenerated = false;
-        
+        let botResponseTimer: NodeJS.Timeout | null = null;
+
         if (transcript) {
-          console.log("Transcript:", transcript, "Is Final:", received.is_final, "Type:", received.type);
           setMessages((prevMessages) => {
             const newMessages = [...prevMessages];
             const lastMessage = newMessages[newMessages.length - 1];
-        
+
             if (lastMessage && lastMessage.type === "user" && currentTime - lastMessageTime < TIME_THRESHOLD) {
               // Append to the interim buffer
               interimBuffer += " " + transcript;
@@ -88,26 +91,45 @@ export default function Dashboard() {
               // Create a new message if it's a new utterance or the first message
               newMessages.push({ type: "user", content: transcript });
               interimBuffer = transcript; // Reset the interim buffer
-              botResponseGenerated = false; // Reset the flag for new message
             }
-        
-            if (received.is_final === true && received.speech_final === true && currentTime - lastMessageTime < 5000) {
-              // Replace the interim message with the final transcript
+
+            if (received.is_final === true) {
+              // Replace the interim buffer with the final transcript
               newMessages[newMessages.length - 1] = {
                 ...newMessages[newMessages.length - 1],
                 content: transcript,
               };
-              interimBuffer = ""; // Clear the buffer
-        
-              if (!botResponseGenerated) {
-                generateBotResponse(newMessages[newMessages.length - 1].content, newMessages);
-                botResponseGenerated = true; // Set the flag to prevent multiple responses
-              }
+              interimBuffer = transcript; // Update the interim buffer
             }
-        
+            
+            if (received.speech_final === true) {
+              // Append the current transcript to the previous transcript
+              newMessages[newMessages.length - 1] = {
+                ...newMessages[newMessages.length - 1],
+                content: newMessages[newMessages.length - 1].content + " " + transcript,
+              };
+              interimBuffer += " " + transcript; // Update the interim buffer
+            }
+            
+            if (received.is_final === true && received.speech_final === true && currentTime - lastMessageTime < 5000) {
+              // Clear the buffer
+              interimBuffer = "";
+            
+              if (botResponseTimer) {
+                clearTimeout(botResponseTimer);
+              }
+            
+              botResponseTimer = setTimeout(() => {
+                generateBotResponse(
+                  newMessages[newMessages.length - 1].content,
+                  newMessages
+                );
+              }, 5000); // Set the timer for 5 seconds
+            }
+
             lastMessageTime = currentTime;
             botResponseStartTime = Date.now();
-        
+
             return newMessages;
           });
         }
@@ -161,150 +183,164 @@ export default function Dashboard() {
     }
   };
 
-  const generateBotResponse = async (userMessage: string, messages: Message[]) => {
+  const generateBotResponse = async (
+    userMessage: string,
+    messages: Message[]
+  ) => {
     try {
-        console.log("Generating bot response for:", userMessage);
-        const backendResponse = await fetch("/api/generate", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                transcription: userMessage,
-                context: messages.map((message) => (message.type === "bot" ? "BOT: " : "USER: ") + message.content + "\n").join(" "),
-            }),
+      console.log("Generating bot response for:", userMessage);
+      const backendResponse = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          transcription: userMessage,
+          context: messages
+            .map(
+              (message) =>
+                (message.type === "bot" ? "BOT: " : "USER: ") +
+                message.content +
+                "\n"
+            )
+            .join(" "),
+        }),
+      });
+
+      if (!backendResponse.ok) {
+        throw new Error(
+          `Failed to fetch response from backend: ${backendResponse.status} ${backendResponse.statusText}`
+        );
+      }
+
+      const reader = backendResponse.body!.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = "";
+      let currentSentence = "";
+      const audioQueue: string[] = [];
+      const audioBlobsQueue: Blob[] = [];
+      let isFirstBlobPlayed = false;
+
+      // Start with an empty message for the bot response
+      setMessages((prev) => [...prev, { type: "bot", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const partialResponse = decoder.decode(value);
+        fullResponse += partialResponse;
+        currentSentence += partialResponse;
+
+        // Update the UI with the current full response so far
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          newMessages[newMessages.length - 1] = {
+            type: "bot",
+            content: fullResponse,
+          };
+          return newMessages;
         });
 
-        if (!backendResponse.ok) {
-            throw new Error(`Failed to fetch response from backend: ${backendResponse.status} ${backendResponse.statusText}`);
-        }
+        // Check for complete sentences
+        const sentences = currentSentence.match(/[^.!?]+[.!?]+/g);
+        if (sentences) {
+          for (const sentence of sentences) {
+            const trimmedSentence = sentence.trim();
+            currentSentence = currentSentence.slice(sentence.length);
+            audioQueue.push(trimmedSentence);
 
-        const reader = backendResponse.body!.getReader();
-        const decoder = new TextDecoder();
-        let fullResponse = "";
-        let currentSentence = "";
-        const audioQueue: string[] = [];
-        const audioBlobsQueue: Blob[] = [];
-        let isFirstBlobPlayed = false;
-
-        // Start with an empty message for the bot response
-        setMessages(prev => [...prev, { type: "bot", content: "" }]);
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const partialResponse = decoder.decode(value);
-            fullResponse += partialResponse;
-            currentSentence += partialResponse;
-
-            // Update the UI with the current full response so far
-            setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1] = {
-                    type: "bot",
-                    content: fullResponse
-                };
-                return newMessages;
-            });
-
-            // Check for complete sentences
-            const sentences = currentSentence.match(/[^.!?]+[.!?]+/g);
-            if (sentences) {
-                for (const sentence of sentences) {
-                    const trimmedSentence = sentence.trim();
-                    currentSentence = currentSentence.slice(sentence.length);
-                    audioQueue.push(trimmedSentence);
-
-                    // Generate and play the first blob immediately
-                    if (!isFirstBlobPlayed) {
-                        isFirstBlobPlayed = true;
-                        const firstBlob = await generateAudioBlob(trimmedSentence);
-                        if (firstBlob) {
-                            await playAudioBlobsSequentially([firstBlob], audioBlobsQueue);
-                        }
-                    }
-                }
+            // Generate and play the first blob immediately
+            if (!isFirstBlobPlayed) {
+              isFirstBlobPlayed = true;
+              const firstBlob = await generateAudioBlob(trimmedSentence);
+              if (firstBlob) {
+                await playAudioBlobsSequentially([firstBlob], audioBlobsQueue);
+              }
             }
+          }
         }
+      }
 
-        // Handle any remaining sentence
-        if (currentSentence.trim()) {
-            audioQueue.push(currentSentence.trim());
+      // Handle any remaining sentence
+      if (currentSentence.trim()) {
+        audioQueue.push(currentSentence.trim());
+      }
+
+      // Pre-fetch remaining audio blobs in the background
+      for (let i = 1; i < audioQueue.length; i++) {
+        const blob = await generateAudioBlob(audioQueue[i]);
+        if (blob) {
+          audioBlobsQueue.push(blob);
         }
+      }
 
-        // Pre-fetch remaining audio blobs in the background
-        for (let i = 1; i < audioQueue.length; i++) {
-            const blob = await generateAudioBlob(audioQueue[i]);
-            if (blob) {
-                audioBlobsQueue.push(blob);
-            }
-        }
+      // Play the remaining pre-fetched audio blobs sequentially
+      if (audioBlobsQueue.length > 0) {
+        await playAudioBlobsSequentially(audioBlobsQueue, []);
+      }
 
-        // Play the remaining pre-fetched audio blobs sequentially
-        if (audioBlobsQueue.length > 0) {
-            await playAudioBlobsSequentially(audioBlobsQueue, []);
-        }
-
-        console.log("Full bot response:", fullResponse);
+      console.log("Full bot response:", fullResponse);
     } catch (error) {
-        console.error("Error generating bot response:", error);
+      console.error("Error generating bot response:", error);
     }
-};
+  };
 
-const generateAudioBlob = async (text: string): Promise<Blob | null> => {
+  const generateAudioBlob = async (text: string): Promise<Blob | null> => {
     try {
-        console.log("Generating TTS for:", text);
-        const audioResponse = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
-        });
+      console.log("Generating TTS for:", text);
+      const audioResponse = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
 
-        if (!audioResponse.ok) {
-            throw new Error(`Failed to generate TTS: ${audioResponse.status} ${audioResponse.statusText}`);
-        }
+      if (!audioResponse.ok) {
+        throw new Error(
+          `Failed to generate TTS: ${audioResponse.status} ${audioResponse.statusText}`
+        );
+      }
 
-        return await audioResponse.blob();
+      return await audioResponse.blob();
     } catch (error) {
-        console.error("Error generating audio blob:", error);
-        return null;
+      console.error("Error generating audio blob:", error);
+      return null;
     }
-};
+  };
 
-const playAudioBlobsSequentially = async (initialBlobs: Blob[], additionalBlobsQueue: Blob[]) => {
+  const playAudioBlobsSequentially = async (
+    initialBlobs: Blob[],
+    additionalBlobsQueue: Blob[]
+  ) => {
     // Play initial blobs
     for (const blob of initialBlobs) {
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
 
-        await new Promise<void>((resolve) => {
-            audio.onended = () => {
-                URL.revokeObjectURL(audioUrl);
-                resolve();
-            };
-            audio.play();
-        });
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+        audio.play();
+      });
     }
 
     // Play any additional blobs queued during initial playback
     while (additionalBlobsQueue.length > 0) {
-        const blob = additionalBlobsQueue.shift()!;
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
+      const blob = additionalBlobsQueue.shift()!;
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
 
-        await new Promise<void>((resolve) => {
-            audio.onended = () => {
-                URL.revokeObjectURL(audioUrl);
-                resolve();
-            };
-            audio.play();
-        });
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+        audio.play();
+      });
     }
-};
+  };
 
-
-
-  
   return (
     <div className="grid h-screen w-full">
       {audioUrl && <audio src={audioUrl} autoPlay />}

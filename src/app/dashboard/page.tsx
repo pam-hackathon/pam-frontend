@@ -8,7 +8,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 interface Message {
   type: "user" | "bot";
@@ -28,6 +28,15 @@ export default function Dashboard() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const startMic = async () => {
     try {
@@ -378,7 +387,7 @@ export default function Dashboard() {
       {audioUrl && <audio src={audioUrl} autoPlay />}
       <div className="flex flex-col">
         <header className="sticky top-0 z-10 flex h-[57px] justify-between items-center gap-1 border-b bg-background px-8">
-          <h1 className="text-xl font-semibold">Playground</h1>
+          <h1 className="text-xl font-semibold">Pam Playground</h1>
           <nav className="flex gap-1">
             <TooltipProvider>
               <Tooltip>
@@ -448,6 +457,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+              <div ref={messagesEndRef} />
             </div>
             <div className="flex gap-2 items-center justify-center mb-8">
               <TooltipProvider>

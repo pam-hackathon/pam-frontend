@@ -53,7 +53,7 @@ export default function Dashboard() {
             socket.send(event.data);
           }
         });
-        mediaRecorder.start(500); // Record in chunks of 250ms
+        mediaRecorder.start(250); // Record in chunks of 250ms
       };
 
       socket.onmessage = async (message) => {
@@ -148,92 +148,147 @@ export default function Dashboard() {
 
   const generateBotResponse = async (userMessage: string, messages: Message[]) => {
     try {
-      //const botResponseStartTime = Date.now(); // Record start time to measure how long the response takes
-      const backendResponse = await fetch("/api/generate", { // Post req to the LLM
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ // User's most recent message and conversation
-          transcription: userMessage,
-          context: messages.map((message) => (message.type === "bot" ? "BOT: " : "USER: ") + message.content + "\n").join(" "),
-        }),
-      });
-  
-      if (!backendResponse.ok) { // Unsuccessful response
-        throw new Error("Failed to fetch response from backend");
-      }
-      
-      // Get reader to stream the response data
-      const reader = backendResponse.body!.getReader();
-      const decoder = new TextDecoder(); // Decoder to convert bytes to text
-      let fullResponse = "";
-      let lastSentence = "";
-      const audioQueue: string[] = []; // Queue for sentences to be converted to audio
-      let isPlaying = false;
-  
-      // Start with an empty message for the bot response
-      setMessages(prev => [...prev, { type: "bot", content: "" }]);
-  
-      const playNextInQueue = async () => {
-        if (audioQueue.length > 0 && !isPlaying) {
-          isPlaying = true; // Indicate audio is playing
-          const text = audioQueue.shift()!; // Get the next sentence from queue
-          const audioResponse = await fetch("/api/tts", {
+        console.log("Generating bot response for:", userMessage);
+        const backendResponse = await fetch("/api/generate", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                transcription: userMessage,
+                context: messages.map((message) => (message.type === "bot" ? "BOT: " : "USER: ") + message.content + "\n").join(" "),
+            }),
+        });
+
+        if (!backendResponse.ok) {
+            throw new Error(`Failed to fetch response from backend: ${backendResponse.status} ${backendResponse.statusText}`);
+        }
+
+        const reader = backendResponse.body!.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = "";
+        let currentSentence = "";
+        const audioQueue: string[] = [];
+        const audioBlobsQueue: Blob[] = [];
+        let isFirstBlobPlayed = false;
+
+        // Start with an empty message for the bot response
+        setMessages(prev => [...prev, { type: "bot", content: "" }]);
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const partialResponse = decoder.decode(value);
+            fullResponse += partialResponse;
+            currentSentence += partialResponse;
+
+            // Update the UI with the current full response so far
+            setMessages(prev => {
+                const newMessages = [...prev];
+                newMessages[newMessages.length - 1] = {
+                    type: "bot",
+                    content: fullResponse
+                };
+                return newMessages;
+            });
+
+            // Check for complete sentences
+            const sentences = currentSentence.match(/[^.!?]+[.!?]+/g);
+            if (sentences) {
+                for (const sentence of sentences) {
+                    const trimmedSentence = sentence.trim();
+                    currentSentence = currentSentence.slice(sentence.length);
+                    audioQueue.push(trimmedSentence);
+
+                    // Generate and play the first blob immediately
+                    if (!isFirstBlobPlayed) {
+                        isFirstBlobPlayed = true;
+                        const firstBlob = await generateAudioBlob(trimmedSentence);
+                        if (firstBlob) {
+                            await playAudioBlobsSequentially([firstBlob], audioBlobsQueue);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle any remaining sentence
+        if (currentSentence.trim()) {
+            audioQueue.push(currentSentence.trim());
+        }
+
+        // Pre-fetch remaining audio blobs in the background
+        for (let i = 1; i < audioQueue.length; i++) {
+            const blob = await generateAudioBlob(audioQueue[i]);
+            if (blob) {
+                audioBlobsQueue.push(blob);
+            }
+        }
+
+        // Play the remaining pre-fetched audio blobs sequentially
+        if (audioBlobsQueue.length > 0) {
+            await playAudioBlobsSequentially(audioBlobsQueue, []);
+        }
+
+        console.log("Full bot response:", fullResponse);
+    } catch (error) {
+        console.error("Error generating bot response:", error);
+    }
+};
+
+const generateAudioBlob = async (text: string): Promise<Blob | null> => {
+    try {
+        console.log("Generating TTS for:", text);
+        const audioResponse = await fetch("/api/tts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text }),
-          });
-          if (audioResponse.ok) {
-            const audioBlob = await audioResponse.blob();
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
+        });
+
+        if (!audioResponse.ok) {
+            throw new Error(`Failed to generate TTS: ${audioResponse.status} ${audioResponse.statusText}`);
+        }
+
+        return await audioResponse.blob();
+    } catch (error) {
+        console.error("Error generating audio blob:", error);
+        return null;
+    }
+};
+
+const playAudioBlobsSequentially = async (initialBlobs: Blob[], additionalBlobsQueue: Blob[]) => {
+    // Play initial blobs
+    for (const blob of initialBlobs) {
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+
+        await new Promise<void>((resolve) => {
             audio.onended = () => {
-              isPlaying = false;
-              playNextInQueue();
+                URL.revokeObjectURL(audioUrl);
+                resolve();
             };
             audio.play();
-          } else {
-            isPlaying = false;
-            playNextInQueue();
-          }
-        }
-      };
-  
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const partialResponse = decoder.decode(value);
-        fullResponse += partialResponse;
-        
-        // Update the UI with the current full response so far
-        setMessages(prev => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1] = {
-            type: "bot",
-            content: fullResponse
-          };
-          return newMessages;
         });
-        
-        // Accumulate sentences for TTS
-        lastSentence += partialResponse;
-        if (lastSentence.endsWith(".") || lastSentence.endsWith("!") || lastSentence.endsWith("?")) {
-          if (lastSentence.trim().length > 0) {
-            audioQueue.push(lastSentence.trim());
-            if (!isPlaying) {
-              playNextInQueue();
-            }
-          }
-          lastSentence = ""; // Reset for next sentence
-        }
-      }
-  
-      console.log(`Time taken to generate bot response: ${Date.now() - botResponseStartTime}ms`);
-    } catch (error) {
-      console.error("Error:", error);
     }
-  };
+
+    // Play any additional blobs queued during initial playback
+    while (additionalBlobsQueue.length > 0) {
+        const blob = additionalBlobsQueue.shift()!;
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+
+        await new Promise<void>((resolve) => {
+            audio.onended = () => {
+                URL.revokeObjectURL(audioUrl);
+                resolve();
+            };
+            audio.play();
+        });
+    }
+};
+
+
+
   
   return (
     <div className="grid h-screen w-full">

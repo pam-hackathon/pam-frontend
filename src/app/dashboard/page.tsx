@@ -17,6 +17,7 @@ interface Message {
 
 export default function Dashboard() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
       type: "bot",
@@ -37,7 +38,7 @@ export default function Dashboard() {
       const tokenResponse = await fetch("/api/websocket");
       const { token } = await tokenResponse.json(); // Fetch token for connecting to WebSocket
       const socket = new WebSocket( // Create WebSocket connection to Deepgram
-        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true&endpointing=650",
+        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true&endpointing=250",
         ["token", token]
       );
 
@@ -59,6 +60,10 @@ export default function Dashboard() {
       };
 
       socket.onmessage = async (message) => {
+        if (isBotSpeaking) {
+          return; // Do not process new transcriptions while the bot is speaking
+        }
+
         const received = JSON.parse(message.data);
         if (
           !received.channel ||
@@ -133,14 +138,12 @@ export default function Dashboard() {
                 " " + transcript.substring(overlapIndex).trim();
             }
 
-            console.log("Running transcript:", runningTranscription);
             newMessages[newMessages.length - 1] = {
               ...newMessages[newMessages.length - 1],
               content: runningTranscription.trim(),
             };
             interimBuffer = ""; // Reset the interim buffer
-
-            if (received.speech_final === true) {
+            if (received.speech_final === true || received.type === "UtteranceEnd") {
               console.log("Generating bot response...");
               if (botResponseTimer) {
                 clearTimeout(botResponseTimer);
@@ -151,32 +154,6 @@ export default function Dashboard() {
               }, 500);
             }
           }
-
-          // if (received.speech_final === true) {
-          //   // Check if the new transcript is an extension of the last part of the running transcription
-          //   const lastWords = runningTranscription.split(" ").slice(-transcript.split(" ").length).join(" ");
-          //   if (lastWords !== transcript) {
-          //     // Remove the last part if it matches the beginning of the new transcript
-          //     runningTranscription = runningTranscription.replace(new RegExp(`\\b${lastWords}$`), "").trim();
-          //   }
-          //   runningTranscription += " " + transcript;
-          //   console.log("Final transcript:", runningTranscription);
-          //   newMessages[newMessages.length - 1] = {
-          //     ...newMessages[newMessages.length - 1],
-          //     content: runningTranscription.trim(),
-          //   };
-          //   // Clear the buffer
-          //   interimBuffer = "";
-
-          //   console.log("Generating bot response...");
-          //   if (botResponseTimer) {
-          //     clearTimeout(botResponseTimer);
-          //   }
-
-          //   botResponseTimer = setTimeout(() => {
-          //     generateBotResponse(runningTranscription, newMessages);
-          //   }, 500);
-          // }
 
           if (currentTime - lastMessageTime >= TIME_THRESHOLD) {
             interimBuffer = ""; // Reset the interim buffer if time threshold is exceeded
@@ -364,6 +341,7 @@ export default function Dashboard() {
     initialBlobs: Blob[],
     additionalBlobsQueue: Blob[]
   ) => {
+    setIsBotSpeaking(true);
     // Play initial blobs
     for (const blob of initialBlobs) {
       const audioUrl = URL.createObjectURL(blob);
@@ -392,6 +370,7 @@ export default function Dashboard() {
         audio.play();
       });
     }
+    setIsBotSpeaking(false);
   };
 
   return (

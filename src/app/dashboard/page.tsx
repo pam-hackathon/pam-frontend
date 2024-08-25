@@ -38,7 +38,7 @@ export default function Dashboard() {
       const tokenResponse = await fetch("/api/websocket")
       const { token } = await tokenResponse.json() // Fetch token for connecting to WebSocket
       const socket = new WebSocket( // Create WebSocket connection to Deepgram
-        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true",
+        "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true&interim_results=true",
         ["token", token]
       );
 
@@ -58,41 +58,56 @@ export default function Dashboard() {
 
       socket.onmessage = async (message) => {
         const received = JSON.parse(message.data);
-      
-        if (!received.channel) {
+        if (!received.channel || !received.channel.alternatives || received.channel.alternatives.length === 0) {
           console.error("No alternatives available in the received message");
           return;
         }
       
         const transcript = received.channel.alternatives[0].transcript;
         const currentTime = Date.now();
+        console.log("Received:", received);
       
+        let interimBuffer = "";
+        let botResponseGenerated = false;
+        
         if (transcript) {
-          console.log(transcript);
+          console.log("Transcript:", transcript, "Is Final:", received.is_final, "Type:", received.type);
           setMessages((prevMessages) => {
             const newMessages = [...prevMessages];
             const lastMessage = newMessages[newMessages.length - 1];
-      
+        
             if (lastMessage && lastMessage.type === "user" && currentTime - lastMessageTime < TIME_THRESHOLD) {
-              // Append to the last user message if within the time threshold
+              // Append to the interim buffer
+              interimBuffer += " " + transcript;
+              // Update the last user message with the interim transcript
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
-                content: lastMessage.content + " " + transcript,
+                content: interimBuffer.trim(),
               };
             } else {
               // Create a new message if it's a new utterance or the first message
               newMessages.push({ type: "user", content: transcript });
+              interimBuffer = transcript; // Reset the interim buffer
+              botResponseGenerated = false; // Reset the flag for new message
             }
-      
-            // Check if the time threshold has been reached for generating a bot response
-            if (currentTime - lastMessageTime >= TIME_THRESHOLD) {
-              console.log("Generating bot response...");
-              generateBotResponse(newMessages[newMessages.length - 1].content, newMessages);
+        
+            if (received.is_final === true && received.speech_final === true && currentTime - lastMessageTime < 5000) {
+              // Replace the interim message with the final transcript
+              newMessages[newMessages.length - 1] = {
+                ...newMessages[newMessages.length - 1],
+                content: transcript,
+              };
+              interimBuffer = ""; // Clear the buffer
+        
+              if (!botResponseGenerated) {
+                generateBotResponse(newMessages[newMessages.length - 1].content, newMessages);
+                botResponseGenerated = true; // Set the flag to prevent multiple responses
+              }
             }
-      
+        
             lastMessageTime = currentTime;
             botResponseStartTime = Date.now();
-      
+        
             return newMessages;
           });
         }

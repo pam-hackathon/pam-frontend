@@ -26,7 +26,7 @@ An AI assistant that transcribes your voice in realtime and responds in sub 1000
 ## Challenges
 
 - The greatest initial challenge had been finding a solution for SST and TTS.
-    - We thought of using WebSockets and Neural Networks for live streaming voice, but we had neither the time nor the expertise, so we settled with [Deepram](https://deepgram.com/).
+    - We thought of using WebSockets and Neural Networks for live streaming voice, but we had neither the time nor the expertise, so we settled with [Deepgram](https://deepgram.com/).
 - Live transcriptions had been the highest hurdle at the end. 
     - We wanted our transcriptions to be shown in realtime, which we achieved with `Deepgram`'s interim results, but had to continuously checked for any repeated word sequences.
 

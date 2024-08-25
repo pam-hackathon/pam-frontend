@@ -24,20 +24,18 @@ export default function Dashboard() {
     },
   ]);
 
-  let userFinishedSpeakingTime = 0;
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   const startMic = async () => {
-    try {
+    try { // Request access to user's mic
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log({ stream });
       const mediaRecorder = new MediaRecorder(stream);
 
       const tokenResponse = await fetch("/api/websocket")
-      const { token } = await tokenResponse.json()
-      const socket = new WebSocket(
+      const { token } = await tokenResponse.json() // Fetch token for connecting to WebSocket
+      const socket = new WebSocket( // Create WebSocket connection to Deepgram
         "wss://api.deepgram.com/v1/listen?model=nova-2-conversationalai&smart_format=true&no_delay=true",
         ["token", token]
       );
@@ -47,12 +45,13 @@ export default function Dashboard() {
 
       socket.onopen = () => {
         console.log({ event: "onopen" });
+        // Start sending recorded audio to WebSocket
         mediaRecorder.addEventListener("dataavailable", (event) => {
           if (event.data.size > 0 && socket.readyState === 1) {
             socket.send(event.data);
           }
         });
-        mediaRecorder.start(250);
+        mediaRecorder.start(250); // Record in chunks of 250ms
       };
 
       socket.onmessage = async (message) => {
@@ -64,6 +63,7 @@ export default function Dashboard() {
           return;
         }
 
+        // Extract transcribed text
         const transcript = received.channel.alternatives[0].transcript;
         const currentTime = Date.now();
 
@@ -71,11 +71,8 @@ export default function Dashboard() {
           console.log(transcript);
           setMessages((prevMessages) => {
             const newMessages = [...prevMessages];
-            if (
-              currentTime - lastMessageTime < TIME_THRESHOLD &&
-              newMessages.length > 0
-            ) {
-              // Append to the last message
+            if (currentTime - lastMessageTime < TIME_THRESHOLD && newMessages.length > 0) { 
+              // If within TIME_THRESHOLD, append to the last message
               const lastMessage = newMessages[newMessages.length - 1];
               if (lastMessage.type === "user") {
                 newMessages[newMessages.length - 1] = {
@@ -151,18 +148,9 @@ export default function Dashboard() {
     }
   };
 
-  const generateBotResponse = async (
-    userMessage: string,
-    messages: Message[]
-  ) => {
+  const generateBotResponse = async (userMessage: string, messages: Message[]) => {
     try {
-      const botResponseStartTime = Date.now(); // Log when the bot starts generating a response
-      // Log the message contents
-      console.log(
-        "Messages: " +messages.map((message) => (message.type === "bot" ? "BOT:" : "USER:") + message.content).join(" ")
-      );
-
-      // Fetch the generated response from your backend
+      const botResponseStartTime = Date.now();
       const backendResponse = await fetch("/api/generate", {
         method: "POST",
         headers: {
@@ -173,45 +161,52 @@ export default function Dashboard() {
           context: messages.map((message) => (message.type === "bot" ? "BOT: " : "USER: ") + message.content + "\n").join(" "),
         }),
       });
-
+  
       if (!backendResponse.ok) {
         throw new Error("Failed to fetch response from backend");
       }
-
-      const backendData = await backendResponse.json();
-      const generatedResponse = backendData.response;
-      let botResponseEndTime = Date.now(); // Log when the bot has generated the response
-      console.log(`Time taken to generate bot response: ${botResponseEndTime - botResponseStartTime}ms`);
-
-      // Fetch the audio blob from your backend route
-      const audioResponse = await fetch("/api/tts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: generatedResponse }),
-      });
-
-      if (!audioResponse.ok) {
-        throw new Error("Failed to fetch audio from backend");
+  
+      const reader = backendResponse.body!.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = "";
+      let lastSentence = "";
+  
+      setMessages(prev => [...prev, { type: "bot", content: "" }]);
+  
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const partialResponse = decoder.decode(value);
+        fullResponse += partialResponse;
+        
+        // Update UI with full response
+        setMessages(prev => {
+          const newMessages = [...prev];
+          newMessages[newMessages.length - 1] = { type: "bot", content: fullResponse };
+          return newMessages;
+        });
+        
+        // Accumulate sentences for TTS
+        lastSentence += partialResponse;
+        if (lastSentence.endsWith(".") || lastSentence.endsWith("!") || lastSentence.endsWith("?")) {
+          // Start TTS for complete sentence
+          if (lastSentence.trim().length > 0) {
+            const audioResponse = await fetch("/api/tts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: lastSentence.trim() }),
+            });
+            if (audioResponse.ok) {
+              const audioBlob = await audioResponse.blob();
+              const audioUrl = URL.createObjectURL(audioBlob);
+              new Audio(audioUrl).play();
+            }
+          }
+          lastSentence = ""; // Reset for next sentence
+        }
       }
-
-      const audioBlob = await audioResponse.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-
-      // Play the generated speech aloud
-      const audio = new Audio(audioUrl);
-
-      botResponseEndTime = Date.now(); // Log when the bot has generated the response
-      console.log(`Time taken to generate bot response: ${botResponseEndTime - botResponseStartTime}ms`);
-      
-      audio.play();
-
-      // Update the messages state with the bot's response
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        { type: "bot", content: generatedResponse },
-      ]);
+  
+      console.log(`Time taken to generate bot response: ${Date.now() - botResponseStartTime}ms`);
     } catch (error) {
       console.error("Error:", error);
     }

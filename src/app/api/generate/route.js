@@ -21,23 +21,41 @@ export async function POST(req) {
   const query = `Context: ${context} \n\n${transcription}`;
 
   try {
-    const response = await groq.chat.completions.create({
+    const stream = await groq.chat.completions.create({
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: query },
       ],
       model: "llama3-groq-8b-8192-tool-use-preview",
+      stream: true,
     });
 
-    const generatedResponse = response.choices[0].message.content;
-    console.log(generatedResponse);
-    return NextResponse.json({ response: generatedResponse });
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          controller.enqueue(encoder.encode(content));
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(readable, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   } catch (error) {
     console.error('Error generating response:', error);
-    return NextResponse.json({ error: 'Failed to generate response from OpenAI' }, { status: 500 });
+    return new Response(JSON.stringify({ error: 'Failed to generate response from Groq' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }
 
 export async function GET() {
-  return NextResponse.json({ error: 'Method not allowed' }, { status: 405 });
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+    status: 405,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }

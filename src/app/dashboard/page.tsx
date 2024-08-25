@@ -24,6 +24,7 @@ export default function Dashboard() {
     },
   ]);
 
+  let userFinishedSpeakingTime = 0;
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export default function Dashboard() {
             }
 
             lastMessageTime = currentTime;
+
             return newMessages;
           });
         }
@@ -154,6 +156,7 @@ export default function Dashboard() {
     messages: Message[]
   ) => {
     try {
+      const botResponseStartTime = Date.now(); // Log when the bot starts generating a response
       // Log the message contents
       console.log(
         "Messages: " +messages.map((message) => (message.type === "bot" ? "BOT:" : "USER:") + message.content).join(" ")
@@ -177,6 +180,8 @@ export default function Dashboard() {
 
       const backendData = await backendResponse.json();
       const generatedResponse = backendData.response;
+      let botResponseEndTime = Date.now(); // Log when the bot has generated the response
+      console.log(`Time taken to generate bot response: ${botResponseEndTime - botResponseStartTime}ms`);
 
       // Fetch the audio blob from your backend route
       const audioResponse = await fetch("/api/tts", {
@@ -196,6 +201,10 @@ export default function Dashboard() {
 
       // Play the generated speech aloud
       const audio = new Audio(audioUrl);
+
+      botResponseEndTime = Date.now(); // Log when the bot has generated the response
+      console.log(`Time taken to generate bot response: ${botResponseEndTime - botResponseStartTime}ms`);
+      
       audio.play();
 
       // Update the messages state with the bot's response
